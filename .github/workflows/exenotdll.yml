@@ -1,4 +1,4 @@
-name: Build llama.cpp Base EXE (No CUDA / No Vulkan)
+name: Build llama.cpp Base EXE (No CUDA / No Vulkan, WITH UI)
 on:
   workflow_dispatch:
   push:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-base-exe:
-    name: Base Executables
+    name: Base Executables (With Chat UI)
     runs-on: windows-latest
     steps:
       - name: Checkout llama.cpp
@@ -19,21 +19,37 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: CMake Configure Base (Shared ON, CUDA OFF, Vulkan OFF)
+      # 预先拉固定版本UI资源，放到本地ui/dist，绕过cmake自动下载逻辑
+      - name: Fetch fixed UI dist
+        run: |
+          mkdir -p ui\apps\chat\dist
+          cd ui\apps\chat
+          curl -L https://huggingface.co/buckets/ggml-org/llama-ui/resolve/b1/dist.tar.gz -o dist.tar.gz
+          tar -xf dist.tar.gz -C dist
+          rm dist.tar.gz
+        shell: pwsh
+
+      - name: CMake Configure Base
         run: |
           mkdir build-base
           cd build-base
-          cmake .. -DGGML_BUILD_SHARED=ON -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake .. `
+            -DGGML_BUILD_SHARED=ON `
+            -DGGML_CUDA=OFF `
+            -DGGML_VULKAN=OFF `
+            -DGGML_BUILD_UI=ON `
+            -DGGML_UI_USE_LOCAL=ON `
+            -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build all base targets (llama-server included)
+      - name: Build llama-server
         run: |
           cd build-base
-          cmake --build . --config Release -j $env:NUMBER_OF_PROCESSORS
+          cmake --build . --config Release --target llama-server -j $env:NUMBER_OF_PROCESSORS
 
-      - name: Package base exe + core ggml.dll
+      - name: Package base exe + core ggml dlls
         run: |
           mkdir pkg-base
-          copy build-base\bin\Release\*.exe pkg-base\
+          copy build-base\bin\Release\llama-server.exe pkg-base\
           copy build-base\bin\Release\ggml.dll pkg-base\
           copy build-base\bin\Release\ggml-base.dll pkg-base\
           cd pkg-base
