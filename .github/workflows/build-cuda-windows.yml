@@ -88,6 +88,7 @@ jobs:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
   hip:
+    if: ${{ false }}
     runs-on: windows-2022
 
     permissions:
