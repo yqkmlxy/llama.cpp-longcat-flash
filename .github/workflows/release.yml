@@ -40,7 +40,7 @@ env:
 
 # note: run this workflow one at a time for better cache reuse
 concurrency:
-  group: release
+  group: releaseWindows
   queue: max
 
 jobs:
