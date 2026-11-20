@@ -1,0 +1,46 @@
+name: Build llama.cpp Base EXE (No CUDA / No Vulkan)
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-base-exe:
+    name: Base Executables
+    runs-on: windows-latest
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: CMake Configure Base (Shared ON, CUDA OFF, Vulkan OFF)
+        run: |
+          mkdir build-base
+          cd build-base
+          cmake .. -DGGML_BUILD_SHARED=ON -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build all base targets (llama-server included)
+        run: |
+          cd build-base
+          cmake --build . --config Release -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Package base exe + core ggml.dll
+        run: |
+          mkdir pkg-base
+          copy build-base\bin\Release\*.exe pkg-base\
+          copy build-base\bin\Release\ggml.dll pkg-base\
+          copy build-base\bin\Release\ggml-base.dll pkg-base\
+          cd pkg-base
+          7z a ../llama-base-exe.zip *
+
+      - name: Upload base artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-base-exe
+          path: llama-base-exe.zip
