@@ -1,0 +1,49 @@
+name: Build llama.cpp Vulkan Backend DLL Only
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-vulkan-backend:
+    name: Vulkan Backend DLL
+    runs-on: windows-latest
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup Vulkan SDK
+        uses: hankh99/setup-vulkan-sdk@v1.2.0
+        with:
+          vulkan-sdk-version: 1.3.290.0
+
+      - name: CMake Configure Vulkan Backend
+        run: |
+          mkdir build-vk
+          cd build-vk
+          cmake .. -DGGML_BUILD_SHARED=ON -DGGML_CUDA=OFF -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build only ggml-vulkan target
+        run: |
+          cd build-vk
+          cmake --build . --config Release --target ggml-vulkan -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Package vulkan backend dll
+        run: |
+          mkdir pkg-vk
+          copy build-vk\bin\Release\ggml-vulkan.dll pkg-vk\
+          cd pkg-vk
+          7z a ../llama-backend-vulkan.zip *
+
+      - name: Upload vulkan backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-backend-vulkan
+          path: llama-backend-vulkan.zip
