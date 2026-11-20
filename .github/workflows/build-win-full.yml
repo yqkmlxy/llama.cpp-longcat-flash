@@ -1,0 +1,99 @@
+# 放到仓库的 .github/workflows/build-win-full.yml 即可（文件名不同于上游，保证被 GitHub 索引）
+# 产物：llama-win-cuda13.5-vulkan-x64.zip
+#   解压即是完整目录：llama-server.exe / llama-cli.exe 等 + ggml-cuda.dll + ggml-vulkan.dll
+#   + ggml-cpu-*.dll + CUDA 13.5 运行库(cudart64_*.dll / cublas64_*.dll / cublasLt64_*.dll)
+# 后端切换：llama-server 启动时会自动加载同目录下的后端 dll；也可用 --device CUDA0 或 --device Vulkan0 指定
+name: Build Windows llama.cpp (CUDA 13.5 + Vulkan)
+
+on:
+  workflow_dispatch:
+
+env:
+  VULKAN_VERSION: 1.4.357.0
+
+# 用自己的并发组，避免和上游 Release 那个 group: release 抢队列
+concurrency:
+  group: build-win-full-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: windows-x64 (cuda 13.5 + vulkan)
+    runs-on: windows-2022
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 复用仓库自带的组合 action 在线安装 CUDA Toolkit（支持 11.7 / 12.4 / 13.1 / 13.5）
+      # 装完会设置 CUDA_PATH 与 PATH
+      - name: Install CUDA Toolkit 13.5
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: '13.5'
+          cuda_arch: 'x64'
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          curl.exe -o "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" -L $url
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+
+      - name: Verify toolchains
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cl
+          nvcc --version
+          glslc --version
+
+      - name: Configure (CMake / MSVC)
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
+            -DGGML_CUDA=ON ^
+            -DGGML_VULKAN=ON ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DLLAMA_BUILD_EXAMPLES=OFF ^
+            -DLLAMA_BUILD_TESTS=OFF
+
+      - name: Build Release
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake --build build --config Release -- /m
+
+      # CUDA 13 的 cudart/cublas 位置在不同版本略有差异，三处都尝试复制
+      - name: Copy CUDA runtime DLLs
+        shell: pwsh
+        run: |
+          $dst = "build\bin\Release"
+          foreach ($src in @("$env:CUDA_PATH\bin", "$env:CUDA_PATH\lib", "$env:CUDA_PATH\bin\x64")) {
+            if (Test-Path $src) {
+              robocopy $src $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll /NJH /NJS /NFL /NDL
+            }
+          }
+          Write-Host "Runtime DLLs in package:"
+          Get-ChildItem $dst -Filter *.dll | Select-Object -ExpandProperty Name
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build\bin\Release\*" -DestinationPath "llama-win-cuda13.5-vulkan-x64.zip" -Force
+          Get-Item "llama-win-cuda13.5-vulkan-x64.zip" | Select-Object Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-win-cuda13.5-vulkan-x64
+          path: llama-win-cuda13.5-vulkan-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+#（注：内容由AI生成）
