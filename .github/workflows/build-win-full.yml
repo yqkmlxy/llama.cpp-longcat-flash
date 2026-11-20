@@ -1,6 +1,6 @@
 # 放到仓库的 .github/workflows/build-win-full.yml 即可（文件名不同于上游，保证被 GitHub 索引）
 # 产物：llama-win-cuda13.5-vulkan-x64.zip
-#   解压即是完整目录：llama-server.exe / llama-cli.exe 等 + ggml-cuda.dll + ggml-vulkan.dll
+#  解压即是完整目录：llama-server.exe / llama-cli.exe 等 + ggml-cuda.dll + ggml-vulkan.dll
 #   + ggml-cpu-*.dll + CUDA 13.5 运行库(cudart64_*.dll / cublas64_*.dll / cublasLt64_*.dll)
 # 后端切换：llama-server 启动时会自动加载同目录下的后端 dll；也可用 --device CUDA0 或 --device Vulkan0 指定
 name: Build Windows llama.cpp (CUDA 13.5 + Vulkan)
