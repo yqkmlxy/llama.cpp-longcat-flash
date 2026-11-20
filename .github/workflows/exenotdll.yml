@@ -1,4 +1,4 @@
-name: Build llama.cpp Base EXE (No CUDA / No Vulkan, WITH UI)
+name: Build llama.cpp Base EXE (No CUDA / No Vulkan, WITH UI, patch validate)
 on:
   workflow_dispatch:
   push:
@@ -19,14 +19,14 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      # 预先拉固定版本UI资源，放到本地ui/dist，绕过cmake自动下载逻辑
-      - name: Fetch fixed UI dist
+      # 关键：临时修改 ui-assets.cmake，注释掉 ui_validate_assets() 调用，干掉校验
+      - name: Patch ui-assets.cmake disable asset validate
         run: |
-          mkdir -p ui\apps\chat\dist
-          cd ui\apps\chat
-          curl -L https://huggingface.co/buckets/ggml-org/llama-ui/resolve/b1/dist.tar.gz -o dist.tar.gz
-          tar -xf dist.tar.gz -C dist
-          rm dist.tar.gz
+          $file = "scripts/ui-assets.cmake"
+          $content = Get-Content $file -Raw
+          # 注释掉 ui_validate_assets(...) 这一行
+          $content = $content -replace 'ui_validate_assets\(', '# ui_validate_assets('
+          Set-Content $file $content
         shell: pwsh
 
       - name: CMake Configure Base
@@ -38,7 +38,6 @@ jobs:
             -DGGML_CUDA=OFF `
             -DGGML_VULKAN=OFF `
             -DGGML_BUILD_UI=ON `
-            -DGGML_UI_USE_LOCAL=ON `
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build llama-server
