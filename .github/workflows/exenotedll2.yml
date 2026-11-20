@@ -1,0 +1,61 @@
+name: Build llama.cpp Base EXE (No CUDA / No Vulkan, WITH UI, patch validate)
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-base-exe:
+    name: Base Executables (With Chat UI)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # ========== 【最重要：patch 放在 checkout 之后，任何cmake之前！】 ==========
+      - name: Patch ui-assets.cmake - wipe ui_validate_assets function
+        run: |
+          $file = "scripts/ui-assets.cmake"
+          $raw = Get-Content $file -Raw
+          # 把整个 ui_validate_assets 函数替换为空函数
+          $patch = $raw -replace 'function\(ui_validate_assets.*?endfunction\(\)', 'function(ui_validate_assets) endfunction()', [System.Text.RegularExpressions.RegexOptions]::Singleline
+          Set-Content $file $patch
+        shell: pwsh
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: CMake Configure Base
+        run: |
+          mkdir build-base
+          cd build-base
+          cmake .. `
+            -DGGML_BUILD_SHARED=ON `
+            -DGGML_CUDA=OFF `
+            -DGGML_VULKAN=OFF `
+            -DGGML_BUILD_UI=ON `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build llama-server
+        run: |
+          cd build-base
+          cmake --build . --config Release --target llama-server -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Package base exe + core ggml dlls
+        run: |
+          mkdir pkg-base
+          copy build-base\bin\Release\llama-server.exe pkg-base\
+          copy build-base\bin\Release\ggml.dll pkg-base\
+          copy build-base\bin\Release\ggml-base.dll pkg-base\
+          cd pkg-base
+          7z a ../llama-base-exe.zip *
+
+      - name: Upload base artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-base-exe
+          path: llama-base-exe.zip
