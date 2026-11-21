@@ -110,9 +110,19 @@ jobs:
         with:
           key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
       - name: Pack artifacts
+        shell: pwsh
         run: |
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Redist\MSVC\14.51.36231\debug_nonredist\x64\Microsoft.VC145.OpenMP.LLVM\libomp140.x86_64.dll" .\build\bin\Release\
-          7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
+          $dll = Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Redist\MSVC" -Recurse -Filter "libomp140.x86_64.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) {
+            $dll = Get-ChildItem -Path "C:\Program Files\LLVM" -Recurse -Filter "libomp*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if ($dll) {
+            Write-Host "Using OpenMP DLL: $($dll.FullName)"
+            Copy-Item $dll.FullName .\build\bin\Release\
+          } else {
+            Write-Warning "libomp DLL not found; skipping copy"
+          }
+          7z a -snl llama-bin-win-cpu-x64.zip .\build\bin\Release\*
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:
