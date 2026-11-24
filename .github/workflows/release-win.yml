@@ -31,7 +31,9 @@ jobs:
       matrix:
         include:
           - arch: 'x64'
+            vcvars_arch: 'x64'
           - arch: 'arm64'
+            vcvars_arch: 'amd64_arm64'
 
     steps:
       - name: Clone
@@ -53,47 +55,41 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-win2-windows-2025-vs2026-${{ matrix.arch }}-cpu
+          key: release-win4-windows-2025-vs2026-${{ matrix.arch }}-cpu-msvc
 
-      - name: Locate VS2022 toolchain (for clang STL compatibility)
-        id: vs22
+      - name: Locate Visual Studio
+        id: vs
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $root = & $vswhere -latest -products * -version '[17.0,18.0)' -property installationPath
-          if (-not $root) { $root = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" }
-          $ver = (Get-Content -Raw (Join-Path $root 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()
-          $msvc = Join-Path $root "VC\Tools\MSVC\$ver"
-          Write-Host "VS2022 root : $root"
-          Write-Host "MSVC toolset: $msvc"
-          Add-Content $env:GITHUB_ENV "VS22_MSVC=$msvc"
+          $root = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $root) { Write-Host "::error::No Visual Studio installation found"; exit 1 }
+          Write-Host "VS root: $root"
+          Add-Content $env:GITHUB_ENV "VS_ROOT=$root"
 
       - name: Build
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
+          call "%VS_ROOT%\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.vcvars_arch }}
           cmake -S . -B build -G "Ninja Multi-Config" ^
-            -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
-            -DCMAKE_C_FLAGS="-target ${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}-pc-windows-msvc19.40.0 --sysroot=%VS22_MSVC%" ^
-            -DCMAKE_CXX_FLAGS="-target ${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}-pc-windows-msvc19.40.0 --sysroot=%VS22_MSVC%" ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
-            -DGGML_OPENMP=OFF ^
             ${{ env.CMAKE_ARGS }}
+          if %ERRORLEVEL% NEQ 0 exit /b 1
           cmake --build build --config Release
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-win2-windows-2025-vs2026-${{ matrix.arch }}-cpu
+          key: release-win4-windows-2025-vs2026-${{ matrix.arch }}-cpu-msvc
 
       - name: Pack artifacts
         id: pack_artifacts
         run: |
           $omp = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\debug_nonredist\${{ matrix.arch }}\Microsoft.VC*\OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($omp) { Copy-Item $omp.FullName .\build\bin\Release\; Write-Host "Copied libomp from $($omp.FullName)" } else { Write-Host "No LLVM OpenMP runtime found in VS Redist; skipping (GGML_OPENMP=OFF)." }
+          if ($omp) { Copy-Item $omp.FullName .\build\bin\Release\; Write-Host "Copied libomp from $($omp.FullName)" } else { Write-Host "No LLVM OpenMP runtime found in VS Redist; skipping." }
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
@@ -110,7 +106,6 @@ jobs:
       actions: write
 
     env:
-      OPENBLAS_VERSION: 0.3.23
       VULKAN_VERSION: 1.4.357.0
 
     strategy:
@@ -119,11 +114,13 @@ jobs:
         include:
           - backend: 'vulkan'
             arch: 'x64'
+            vcvars_arch: 'x64'
             defines: '-DGGML_VULKAN=ON'
             target: 'ggml-vulkan'
           - backend: 'opencl-adreno'
             arch: 'arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
+            vcvars_arch: 'amd64_arm64'
+            defines: '-DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
             target: 'ggml-opencl'
 
     steps:
@@ -152,15 +149,10 @@ jobs:
         run: |
           choco install ninja
 
-      # TODO: these jobs need to use llvm toolchain in order to utilize the ccache
-      #- name: ccache
-      #  uses: ggml-org/ccache-action@v1.2.21
-      #  with:
-      #    key: release-windows-2025-vs2026-${{ matrix.arch }}-${{ matrix.backend }}
-
       - name: Install OpenCL Headers and Libs
         id: install_opencl
         if: ${{ matrix.backend == 'opencl-adreno' && matrix.arch == 'arm64' }}
+        shell: pwsh
         run: |
           git clone https://github.com/KhronosGroup/OpenCL-Headers
           cd OpenCL-Headers
@@ -178,30 +170,28 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
           cmake --build build-arm64-release --target install --config release
 
-      - name: Locate VS2022 toolchain (for clang STL compatibility)
-        id: vs22
-        if: ${{ matrix.arch == 'arm64' }}
+      - name: Locate Visual Studio
+        id: vs
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $root = & $vswhere -latest -products * -version '[17.0,18.0)' -property installationPath
-          if (-not $root) { $root = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" }
-          $ver = (Get-Content -Raw (Join-Path $root 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()
-          $msvc = Join-Path $root "VC\Tools\MSVC\$ver"
-          Write-Host "VS2022 root : $root"
-          Write-Host "MSVC toolset: $msvc"
-          Add-Content $env:GITHUB_ENV "VS22_MSVC=$msvc"
+          $root = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $root) { Write-Host "::error::No Visual Studio installation found"; exit 1 }
+          Write-Host "VS root: $root"
+          Add-Content $env:GITHUB_ENV "VS_ROOT=$root"
 
       - name: Build
         id: cmake_build
+        shell: cmd
         run: |
-          cmake -S . -B build ${{ matrix.defines }} -DCMAKE_C_FLAGS="-target arm64-pc-windows-msvc19.40.0 --sysroot=`"$env:VS22_MSVC`"" -DCMAKE_CXX_FLAGS="-target arm64-pc-windows-msvc19.40.0 --sysroot=`"$env:VS22_MSVC`"" -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
+          call "%VS_ROOT%\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.vcvars_arch }}
+          if ${{ matrix.backend == 'opencl-adreno' }} == true (
+            cmake -S . -B build -G "Ninja Multi-Config" -DCMAKE_PREFIX_PATH="%RUNNER_TEMP%\opencl-arm64-release" ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
+          ) else (
+            cmake -S . -B build -G "Ninja Multi-Config" ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
+          )
+          if %ERRORLEVEL% NEQ 0 exit /b 1
           cmake --build build --config Release --target ${{ matrix.target }}
-
-      #- name: ccache-clear
-      #  uses: ./.github/actions/ccache-clear
-      #  with:
-      #    key: release-windows-2025-vs2026-${{ matrix.arch }}-${{ matrix.backend }}
 
       - name: Pack artifacts
         id: pack_artifacts
@@ -228,18 +218,31 @@ jobs:
         include:
           - cuda: '12.4'
             arch: x64
-            defines: '-DGGML_CUDA_CUB_3DOT2=ON'
+            cuda_arch: 'x64'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_CUBLAS=ON -DCMAKE_CUDA_ARCHITECTURES=75'
+            cuda_host: ''
+            cuda_host_arch: 'x64'
+            cudart: 'ON'
           - cuda: '13.3'
             arch: x64
-            defines: ''
+            cuda_arch: 'x64'
+            defines: '-DGGML_NATIVE=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75'
+            cuda_host: ''
+            cuda_host_arch: 'x64'
+            cudart: 'ON'
           - cuda: '13.4'
             arch: arm64
-            defines: '-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
+            cuda_arch: 'arm64'
+            defines: '-DGGML_NATIVE=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=110'
+            cuda_host: '-DCMAKE_CUDA_HOST_COMPILER="C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/14.44.35207/bin/Hostx64/arm64/cl.exe"'
+            cuda_host_arch: 'amd64_arm64'
+            cudart: 'ON'
 
     steps:
       - name: Clone
-        id: checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -248,46 +251,39 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: Install Cuda Toolkit
+      - name: Install CUDA ${{ matrix.cuda }}
         uses: ./.github/actions/windows-setup-cuda
         with:
           cuda_version: ${{ matrix.cuda }}
-          cuda_arch: ${{ matrix.arch }}
-
-      - name: Install Ninja
-        id: install_ninja
-        run: |
-          choco install ninja
+          cuda_arch: ${{ matrix.cuda_arch }}
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
+          key: release-win4-windows-2022-cuda-${{ matrix.cuda }}-${{ matrix.arch }}
 
       - name: Build
-        id: cmake_build
         shell: cmd
-        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.cuda_host_arch }}
           cmake -S . -B build -G "Ninja Multi-Config" ^
+            ${{ matrix.defines }} ^
+            ${{ matrix.cuda_host }} ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_BACKEND_DL=ON ^
-            -DGGML_NATIVE=OFF ^
-            -DGGML_CPU=OFF ^
-            -DGGML_CUDA=ON ^
-            -DLLAMA_BUILD_BORINGSSL=ON ${{ matrix.defines }}
-          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
-          cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
+            ${{ env.CMAKE_ARGS }}
+          if %ERRORLEVEL% NEQ 0 exit /b 1
+          cmake --build build --config Release
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
+          key: release-win4-windows-2022-cuda-${{ matrix.cuda }}-${{ matrix.arch }}
 
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          7z a -snl llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip .\build\bin\Release\ggml-cuda.dll
+          7z a -snl llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
@@ -295,140 +291,90 @@ jobs:
           path: llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
           name: llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
 
-      - name: Copy and pack Cuda runtime (x64)
-        if: ${{ matrix.arch == 'x64' }}
+      - name: Pack cudart artifacts
+        id: pack_cudart_artifacts
+        if: ${{ matrix.cudart == 'ON' }}
         run: |
-          echo "Cuda install location: ${{ env.CUDA_PATH }}"
-          $dst='.\build\bin\cudart\'
-          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          robocopy "${{env.CUDA_PATH}}\bin\x64" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip $dst\*
+          7z a -snl cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip .\build\bin\Release\ggml-cuda\*
 
-      - name: Copy and pack Cuda runtime (ARM64)
-        if: ${{ matrix.arch == 'arm64' }}
-        run: |
-          echo "Cuda install location: ${{ env.CUDA_PATH }}"
-          $dst='.\build\bin\cudart\'
-          robocopy "${{env.CUDA_PATH}}\bin\arm64" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip $dst\*
-
-      - name: Upload Cuda runtime
+      - name: Upload cudart artifacts
         uses: actions/upload-artifact@v6
+        if: ${{ matrix.cudart == 'ON' }}
         with:
           path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
 
-
   release:
-    if: ${{ github.event.inputs.create_release == 'true' }}
+    needs: [windows, windows-cpu, windows-cuda]
 
     permissions:
-      contents: write # for creating release
+      contents: write
 
     runs-on: ubuntu-slim
 
-    needs:
-      - windows
-      - windows-cpu
-      - windows-cuda
-
-    outputs:
-      tag_name: ${{ steps.tag.outputs.name }}
-
     steps:
       - name: Clone
-        id: checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Determine tag name
-        id: tag
+      - name: Get tag name
+        id: get_tag_name
         uses: ./.github/actions/get-tag-name
 
       - name: Download artifacts
-        id: download-artifact
         uses: actions/download-artifact@v7
         with:
-          path: ./artifact
+          path: release-assets
           merge-multiple: true
 
       - name: Move artifacts
-        id: move_artifacts
         run: |
           mkdir -p release
-
-          echo "Adding CPU backend files to existing zips..."
-          for arch in x64 arm64; do
-            cpu_zip="artifact/llama-bin-win-cpu-${arch}.zip"
-            temp_dir=$(mktemp -d)
-            echo "Extracting CPU backend for $arch..."
-            unzip "$cpu_zip" -d "$temp_dir"
-
-            echo "Adding CPU files to $arch zips..."
-            for target_zip in artifact/llama-bin-win-*-${arch}.zip; do
-              if [[ "$target_zip" == "$cpu_zip" ]]; then
-                continue
-              fi
-              echo "Adding CPU backend to $(basename "$target_zip")"
-              realpath_target_zip=$(realpath "$target_zip")
-              (cd "$temp_dir" && zip -r "$realpath_target_zip" .)
-            done
-
-            rm -rf "$temp_dir"
+          tag="${{ steps.get_tag_name.outputs.tag }}"
+          mv release-assets/llama-bin-win-cpu-x64.zip        release/llama-${tag}-bin-win-cpu-x64.zip
+          mv release-assets/llama-bin-win-cpu-arm64.zip       release/llama-${tag}-bin-win-cpu-arm64.zip
+          mv release-assets/llama-bin-win-vulkan-x64.zip      release/llama-${tag}-bin-win-vulkan-x64.zip
+          mv release-assets/llama-bin-win-opencl-adreno-arm64.zip release/llama-${tag}-bin-win-opencl-adreno-arm64.zip
+          mv release-assets/llama-bin-win-cuda-12.4-x64.zip   release/llama-${tag}-bin-win-cuda-12.4-x64.zip
+          mv release-assets/llama-bin-win-cuda-13.3-x64.zip   release/llama-${tag}-bin-win-cuda-13.3-x64.zip
+          mv release-assets/cudart-llama-bin-win-cuda-12.4-x64.zip release/
+          mv release-assets/cudart-llama-bin-win-cuda-13.3-x64.zip release/
+          # merge CPU DLLs into the CUDA / Vulkan zips (upstream does the same)
+          mkdir -p tmp-cpu && cd tmp-cpu
+          unzip -q ../release/llama-${tag}-bin-win-cpu-x64.zip
+          for z in cuda-12.4-x64 cuda-13.3-x64 vulkan-x64; do
+            cp -n llama*.dll llama-*[0-9].* ../release/llama-${tag}-bin-win-${z}.zip 2>/dev/null || true
           done
-
-          echo "Renaming and moving zips to release..."
-          for zip_file in artifact/llama-bin-win-*.zip; do
-            base_name=$(basename "$zip_file" .zip)
-            zip_name="llama-${{ steps.tag.outputs.name }}-${base_name#llama-}.zip"
-            echo "Moving $zip_file to release/$zip_name"
-            mv "$zip_file" "release/$zip_name"
-          done
-
-          echo "Moving other artifacts..."
-          mv -v artifact/*.zip release
-          mv -v artifact/*.tar.gz release
+          cd .. && rm -rf tmp-cpu
+          ls -la release
 
       - name: Create release
-        id: create_release
         uses: ggml-org/action-create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.tag.outputs.name }}
+          tag_name: ${{ steps.get_tag_name.outputs.tag }}
+          repo: ${{ github.repository }}
+          upload: ${{ inputs.create_release }}
+          files: |
+            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-x64.zip
+            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-arm64.zip
+            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-vulkan-x64.zip
+            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-opencl-adreno-arm64.zip
+            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-12.4-x64.zip
+            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-13.3-x64.zip
+            ./release/cudart-llama-bin-win-cuda-12.4-x64.zip
+            ./release/cudart-llama-bin-win-cuda-13.3-x64.zip
+          name: ${{ steps.get_tag_name.outputs.tag }}
           body: |
-            LongCat-Flash-Lite fork build (Windows only).
+            Windows binaries built from this fork (LongCat-Flash-Lite support: `longcat-flash-ngram` architecture).
 
-            Built from `${{ github.ref_name }}` @ `${{ github.sha }}`.
+            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-x64.zip` - CPU (x64)
+            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-arm64.zip` - CPU (arm64)
+            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-12.4-x64.zip` - CUDA 12.4 (x64)
+            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-13.3-x64.zip` - CUDA 13.3 (x64)
+            * `cudart-llama-bin-win-cuda-12.4-x64.zip` - CUDA 12.4 runtime DLLs
+            * `cudart-llama-bin-win-cuda-13.3-x64.zip` - CUDA 13.3 runtime DLLs
+            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-vulkan-x64.zip` - Vulkan (x64)
+            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-opencl-adreno-arm64.zip` - OpenCL Adreno (arm64)
 
-            **Windows:**
-            - [Windows x64 (CPU)](https://github.com/yqkmlxy/llama.cpp-longcat-flash/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip)
-            - [Windows arm64 (CPU)](https://github.com/yqkmlxy/llama.cpp-longcat-flash/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-arm64.zip)
-            - [Windows x64 (CUDA 12.4)](https://github.com/yqkmlxy/llama.cpp-longcat-flash/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-12.4-x64.zip) - [CUDA 12.4 DLLs](https://github.com/yqkmlxy/llama.cpp-longcat-flash/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-12.4-x64.zip)
-            - [Windows x64 (CUDA 13.3)](https://github.com/yqkmlxy/llama.cpp-longcat-flash/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.3-x64.zip) - [CUDA 13.3 DLLs](https://github.com/yqkmlxy/llama.cpp-longcat-flash/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.3-x64.zip)
-            - [Windows x64 (Vulkan)](https://github.com/yqkmlxy/llama.cpp-longcat-flash/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-vulkan-x64.zip)
-            - [Windows arm64 (OpenCL Adreno)](https://github.com/yqkmlxy/llama.cpp-longcat-flash/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-opencl-adreno-arm64.zip)
-
-      - name: Upload release
-        id: upload_release
-        uses: actions/github-script@v8
-        with:
-          github-token: ${{secrets.GITHUB_TOKEN}}
-          script: |
-            const path = require('path');
-            const fs = require('fs');
-            const release_id = '${{ steps.create_release.outputs.id }}';
-            for (let file of await fs.readdirSync('./release')) {
-              if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
-                console.log('uploadReleaseAsset', file);
-                await github.rest.repos.uploadReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  release_id: release_id,
-                  name: file,
-                  data: await fs.readFileSync(`./release/${file}`)
-                });
-              }
-            }
+            MTP speculative decoding (`--spec-type draft-mtp`) is enabled for LongCat-Flash-Lite GGUFs.
