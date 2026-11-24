@@ -21,7 +21,7 @@ jobs:
 
   windows-cpu:
 
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
 
     permissions:
       actions: write
@@ -53,31 +53,47 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-win2-windows-2025-${{ matrix.arch }}-cpu
+          key: release-win2-windows-2025-vs2026-${{ matrix.arch }}-cpu
+
+      - name: Locate VS2022 toolchain (for clang STL compatibility)
+        id: vs22
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $root = & $vswhere -latest -products * -version '[17.0,18.0)' -property installationPath
+          if (-not $root) { $root = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" }
+          $ver = (Get-Content -Raw (Join-Path $root 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()
+          $msvc = Join-Path $root "VC\Tools\MSVC\$ver"
+          Write-Host "VS2022 root : $root"
+          Write-Host "MSVC toolset: $msvc"
+          Add-Content $env:GITHUB_ENV "VS22_MSVC=$msvc"
 
       - name: Build
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
+          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
+            -DCMAKE_C_FLAGS="-target ${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}-pc-windows-msvc19.40.0 --sysroot=%VS22_MSVC%" ^
+            -DCMAKE_CXX_FLAGS="-target ${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}-pc-windows-msvc19.40.0 --sysroot=%VS22_MSVC%" ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
-            -DGGML_OPENMP=ON ^
+            -DGGML_OPENMP=OFF ^
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-win2-windows-2025-${{ matrix.arch }}-cpu
+          key: release-win2-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\*\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
+          $omp = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\debug_nonredist\${{ matrix.arch }}\Microsoft.VC*\OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($omp) { Copy-Item $omp.FullName .\build\bin\Release\; Write-Host "Copied libomp from $($omp.FullName)" } else { Write-Host "No LLVM OpenMP runtime found in VS Redist; skipping (GGML_OPENMP=OFF)." }
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
@@ -88,7 +104,7 @@ jobs:
 
   windows:
 
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
 
     permissions:
       actions: write
@@ -140,7 +156,7 @@ jobs:
       #- name: ccache
       #  uses: ggml-org/ccache-action@v1.2.21
       #  with:
-      #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
+      #    key: release-windows-2025-vs2026-${{ matrix.arch }}-${{ matrix.backend }}
 
       - name: Install OpenCL Headers and Libs
         id: install_opencl
@@ -162,16 +178,30 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
           cmake --build build-arm64-release --target install --config release
 
+      - name: Locate VS2022 toolchain (for clang STL compatibility)
+        id: vs22
+        if: ${{ matrix.arch == 'arm64' }}
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $root = & $vswhere -latest -products * -version '[17.0,18.0)' -property installationPath
+          if (-not $root) { $root = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" }
+          $ver = (Get-Content -Raw (Join-Path $root 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()
+          $msvc = Join-Path $root "VC\Tools\MSVC\$ver"
+          Write-Host "VS2022 root : $root"
+          Write-Host "MSVC toolset: $msvc"
+          Add-Content $env:GITHUB_ENV "VS22_MSVC=$msvc"
+
       - name: Build
         id: cmake_build
         run: |
-          cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
+          cmake -S . -B build ${{ matrix.defines }} -DCMAKE_C_FLAGS="-target arm64-pc-windows-msvc19.40.0 --sysroot=`"$env:VS22_MSVC`"" -DCMAKE_CXX_FLAGS="-target arm64-pc-windows-msvc19.40.0 --sysroot=`"$env:VS22_MSVC`"" -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release --target ${{ matrix.target }}
 
       #- name: ccache-clear
       #  uses: ./.github/actions/ccache-clear
       #  with:
-      #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
+      #    key: release-windows-2025-vs2026-${{ matrix.arch }}-${{ matrix.backend }}
 
       - name: Pack artifacts
         id: pack_artifacts
