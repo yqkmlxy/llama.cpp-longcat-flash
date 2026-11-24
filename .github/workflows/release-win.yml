@@ -32,8 +32,6 @@ jobs:
         include:
           - arch: 'x64'
             vcvars_arch: 'x64'
-          - arch: 'arm64'
-            vcvars_arch: 'amd64_arm64'
 
     steps:
       - name: Clone
@@ -75,7 +73,7 @@ jobs:
             -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
-            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
+            -DGGML_CPU_ALL_VARIANTS=OFF ^
             ${{ env.CMAKE_ARGS }}
           if %ERRORLEVEL% NEQ 0 exit /b 1
           cmake --build build --config Release
@@ -219,7 +217,7 @@ jobs:
           - cuda: '12.4'
             arch: x64
             cuda_arch: 'x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_CUBLAS=ON -DCMAKE_CUDA_ARCHITECTURES=75'
+            defines: '-DGGML_NATIVE=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75'
             cuda_host: ''
             cuda_host_arch: 'x64'
             cudart: 'ON'
@@ -229,13 +227,6 @@ jobs:
             defines: '-DGGML_NATIVE=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75'
             cuda_host: ''
             cuda_host_arch: 'x64'
-            cudart: 'ON'
-          - cuda: '13.4'
-            arch: arm64
-            cuda_arch: 'arm64'
-            defines: '-DGGML_NATIVE=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=110'
-            cuda_host: '-DCMAKE_CUDA_HOST_COMPILER="C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/14.44.35207/bin/Hostx64/arm64/cl.exe"'
-            cuda_host_arch: 'amd64_arm64'
             cudart: 'ON'
 
     steps:
@@ -294,8 +285,13 @@ jobs:
       - name: Pack cudart artifacts
         id: pack_cudart_artifacts
         if: ${{ matrix.cudart == 'ON' }}
+        shell: cmd
         run: |
-          7z a -snl cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip .\build\bin\Release\ggml-cuda\*
+          7z a -snl cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip ^
+            .\build\bin\Release\ggml-cuda.dll ^
+            .\build\bin\Release\cudart64_*.dll ^
+            .\build\bin\Release\cublas64_*.dll ^
+            .\build\bin\Release\cublasLt64_*.dll
 
       - name: Upload cudart artifacts
         uses: actions/upload-artifact@v6
@@ -310,7 +306,7 @@ jobs:
     permissions:
       contents: write
 
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
 
     steps:
       - name: Clone
@@ -333,7 +329,6 @@ jobs:
           mkdir -p release
           tag="${{ steps.get_tag_name.outputs.tag }}"
           mv release-assets/llama-bin-win-cpu-x64.zip        release/llama-${tag}-bin-win-cpu-x64.zip
-          mv release-assets/llama-bin-win-cpu-arm64.zip       release/llama-${tag}-bin-win-cpu-arm64.zip
           mv release-assets/llama-bin-win-vulkan-x64.zip      release/llama-${tag}-bin-win-vulkan-x64.zip
           mv release-assets/llama-bin-win-opencl-adreno-arm64.zip release/llama-${tag}-bin-win-opencl-adreno-arm64.zip
           mv release-assets/llama-bin-win-cuda-12.4-x64.zip   release/llama-${tag}-bin-win-cuda-12.4-x64.zip
@@ -344,7 +339,7 @@ jobs:
           mkdir -p tmp-cpu && cd tmp-cpu
           unzip -q ../release/llama-${tag}-bin-win-cpu-x64.zip
           for z in cuda-12.4-x64 cuda-13.3-x64 vulkan-x64; do
-            cp -n llama*.dll llama-*[0-9].* ../release/llama-${tag}-bin-win-${z}.zip 2>/dev/null || true
+            zip -q ../release/llama-${tag}-bin-win-${z}.zip *.dll
           done
           cd .. && rm -rf tmp-cpu
           ls -la release
@@ -357,7 +352,6 @@ jobs:
           upload: ${{ inputs.create_release }}
           files: |
             ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-x64.zip
-            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-arm64.zip
             ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-vulkan-x64.zip
             ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-opencl-adreno-arm64.zip
             ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-12.4-x64.zip
@@ -369,7 +363,6 @@ jobs:
             Windows binaries built from this fork (LongCat-Flash-Lite support: `longcat-flash-ngram` architecture).
 
             * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-x64.zip` - CPU (x64)
-            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-arm64.zip` - CPU (arm64)
             * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-12.4-x64.zip` - CUDA 12.4 (x64)
             * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-13.3-x64.zip` - CUDA 13.3 (x64)
             * `cudart-llama-bin-win-cuda-12.4-x64.zip` - CUDA 12.4 runtime DLLs
