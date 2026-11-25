@@ -327,7 +327,7 @@ jobs:
       - name: Move artifacts
         run: |
           mkdir -p release
-          tag="${{ steps.get_tag_name.outputs.tag }}"
+          tag="${{ steps.get_tag_name.outputs.name }}"
           mv release-assets/llama-bin-win-cpu-x64.zip        release/llama-${tag}-bin-win-cpu-x64.zip
           mv release-assets/llama-bin-win-vulkan-x64.zip      release/llama-${tag}-bin-win-vulkan-x64.zip
           mv release-assets/llama-bin-win-opencl-adreno-arm64.zip release/llama-${tag}-bin-win-opencl-adreno-arm64.zip
@@ -346,28 +346,27 @@ jobs:
 
       - name: Create release
         uses: ggml-org/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.get_tag_name.outputs.tag }}
-          repo: ${{ github.repository }}
-          upload: ${{ inputs.create_release }}
-          files: |
-            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-x64.zip
-            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-vulkan-x64.zip
-            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-opencl-adreno-arm64.zip
-            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-12.4-x64.zip
-            ./release/llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-13.3-x64.zip
-            ./release/cudart-llama-bin-win-cuda-12.4-x64.zip
-            ./release/cudart-llama-bin-win-cuda-13.3-x64.zip
-          name: ${{ steps.get_tag_name.outputs.tag }}
+          tag_name: ${{ steps.get_tag_name.outputs.name }}
+          release_name: ${{ steps.get_tag_name.outputs.name }}
           body: |
             Windows binaries built from this fork (LongCat-Flash-Lite support: `longcat-flash-ngram` architecture).
 
-            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cpu-x64.zip` - CPU (x64)
-            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-12.4-x64.zip` - CUDA 12.4 (x64)
-            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-cuda-13.3-x64.zip` - CUDA 13.3 (x64)
+            * `llama-${{ steps.get_tag_name.outputs.name }}-bin-win-cpu-x64.zip` - CPU (x64)
+            * `llama-${{ steps.get_tag_name.outputs.name }}-bin-win-cuda-12.4-x64.zip` - CUDA 12.4 (x64)
+            * `llama-${{ steps.get_tag_name.outputs.name }}-bin-win-cuda-13.3-x64.zip` - CUDA 13.3 (x64)
             * `cudart-llama-bin-win-cuda-12.4-x64.zip` - CUDA 12.4 runtime DLLs
             * `cudart-llama-bin-win-cuda-13.3-x64.zip` - CUDA 13.3 runtime DLLs
-            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-vulkan-x64.zip` - Vulkan (x64)
-            * `llama-${{ steps.get_tag_name.outputs.tag }}-bin-win-opencl-adreno-arm64.zip` - OpenCL Adreno (arm64)
+            * `llama-${{ steps.get_tag_name.outputs.name }}-bin-win-vulkan-x64.zip` - Vulkan (x64)
+            * `llama-${{ steps.get_tag_name.outputs.name }}-bin-win-opencl-adreno-arm64.zip` - OpenCL Adreno (arm64)
 
             MTP speculative decoding (`--spec-type draft-mtp`) is enabled for LongCat-Flash-Lite GGUFs.
+
+      - name: Upload release assets
+        if: ${{ inputs.create_release }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.get_tag_name.outputs.name }}" release/*.zip --clobber
