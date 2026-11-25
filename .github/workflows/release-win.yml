@@ -282,16 +282,17 @@ jobs:
           path: llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
           name: llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
 
-      - name: Pack cudart artifacts
+      - name: Copy and pack Cuda runtime (x64)
         id: pack_cudart_artifacts
         if: ${{ matrix.cudart == 'ON' }}
-        shell: cmd
+        shell: pwsh
         run: |
-          7z a -snl cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip ^
-            .\build\bin\Release\ggml-cuda.dll ^
-            .\build\bin\Release\cudart64_*.dll ^
-            .\build\bin\Release\cublas64_*.dll ^
-            .\build\bin\Release\cublasLt64_*.dll
+          Write-Host "Cuda install location: $env:CUDA_PATH"
+          $dst = '.\build\bin\cudart\'
+          robocopy "$env:CUDA_PATH\bin"     $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "$env:CUDA_PATH\lib"     $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "$env:CUDA_PATH\bin\x64" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip $dst\*
 
       - name: Upload cudart artifacts
         uses: actions/upload-artifact@v6
